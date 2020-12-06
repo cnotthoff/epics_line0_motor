@@ -1,0 +1,38 @@
+#!../../bin/linux-x86_64/CNemeLine0
+
+< envPaths
+
+## Register all support components
+dbLoadDatabase "../../dbd/CNemeLine0.dbd"
+CNemeLine0_registerRecordDeviceDriver pdbbase
+
+#IF if the user also defines EPICS_CAS_INTF_ADDR_LIST then beacon address
+#list automatic configuration is constrained to the network interfaces specified
+#therein, and therefore only the broadcast addresses of the specified LAN interfaces,
+#and the destination addresses of all specified point-to-point links, will be automatically configured.
+epicsEnvSet ("EPICS_CAS_INTF_ADDR_LIST","127.0.0.1")
+
+## Configure devices
+drvAsynIPPortConfigure("L0","127.0.0.1:5000",0,0,0)
+#drvAsynIPPortConfigure("L0","192.168.1.2:5000",0,0,0)
+#drvAsynIPPortConfigure("L0","150.168.1.2:4001",0,0,0)
+
+asynOctetSetInputEos("L0",0,"\r\n")
+asynOctetSetOutputEos("L0",0,"\r\n")
+asynSetTraceIOMask("L0",0,0x2)
+#asynSetTraceMask("L0",0,0x9)
+#asynSetTraceMask("L0",0,255)
+
+## Load record instances
+dbLoadRecords("$(ASYN)/db/asynRecord.db","P=EME:,R=L0,PORT=L0,ADDR=0,IMAX=100,OMAX=100")
+
+# Create simulated motors:
+CNEMECreateController("CNEME1","L0",1,2,5000)
+CNEMEConfigAxis("CNEME1",0,15000)
+dbLoadTemplate "motor.substitutions.cneme"
+
+cd "${TOP}/iocBoot/${IOC}"
+iocInit
+
+## Start any sequence programs
+#seq sncxxx,"user=xxx"

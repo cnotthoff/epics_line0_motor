@@ -1,0 +1,35 @@
+#!../../bin/linux-x86_64/CNemeLine0
+
+#basic com testing ioc, no good for anything
+
+< envPaths
+
+cd "${TOP}"
+
+## Register all support components
+dbLoadDatabase "dbd/CNemeLine0.dbd"
+CNemeLine0_registerRecordDeviceDriver pdbbase
+
+#IF if the user also defines EPICS_CAS_INTF_ADDR_LIST then beacon address
+#list automatic configuration is constrained to the network interfaces specified
+#therein, and therefore only the broadcast addresses of the specified LAN interfaces,
+#and the destination addresses of all specified point-to-point links, will be automatically configured.
+#epicsEnvSet ("EPICS_CAS_INTF_ADDR_LIST","aaa.aaa.aaa.aaa")
+
+## Configure devices
+drvAsynIPPortConfigure("L0","127.8.0.1:5000",0,0,0)
+asynOctetSetInputEos("L0",0,"\r\n")
+asynOctetSetOutputEos("L0",0,"\r\n")
+asynSetTraceIOMask("L0",0,0x2)
+asynSetTraceMask("L0",0,0x9)
+
+asynWaitConnect("L0",.1)
+asynOctetConnect("AA","L0",0)
+
+## Load record instances
+dbLoadRecords("db/asynRecord.db","P=norum:,R=asyn,PORT=L0,ADDR=0,IMAX=100,OMAX=100")
+
+cd "${TOP}/iocBoot/${IOC}"
+iocInit
+
+asynOctetWriteRead("AA","/1?8\r\n")

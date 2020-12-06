@@ -1,0 +1,6 @@
+file "my_basic_asyn_motor.db"
+{
+pattern
+{P,    N,    M,        DTYP,      PORT,  ADDR,     DESC,     EGU,   DIR,     MRES, ERES, PREC,   DHLM, DLLM, INIT}
+{EME:, 1, "m$(N)", "asynMotor",  CNEME1,  0,   "EME:Line0",   mm,   Pos,    .0002,  .0002,    3,   50,    15,    ""}
+}
