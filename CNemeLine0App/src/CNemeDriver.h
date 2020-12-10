@@ -22,8 +22,10 @@ Modifications:
 
 #define MAX_CNEME_AXES 9
 
-// No controller-specific parameters yet
-#define NUM_CNEME_PARAMS 0  
+// One controller-specific parameters yet
+#define NUM_CNEME_PARAMS 1
+
+#define cnmotorResetString              "CNMOTOR_RESET"
 
 class epicsShareClass CNEMEAxis : public asynMotorAxis
 {
@@ -38,6 +40,9 @@ public:
   asynStatus poll(bool *moving);
   asynStatus setPosition(double position);
   //asynStatus setClosedLoop(bool closedLoop);
+
+  asynStatus setHighLimit(double highLimit);
+  asynStatus setLowLimit(double lowLimit);
   
   /* These are the methods that are new to this class */
   asynStatus config(int home, int vel);
@@ -49,6 +54,9 @@ public:
 
   int limitmap[3];// high, low, home. if -1 not in use
   bool isInitialised_;
+  int hl_,ll_;
+  double home_;
+  int posMode_;
   
   friend class CNEMEController;
 };
@@ -56,12 +64,16 @@ public:
 class epicsShareClass CNEMEController : public asynMotorController {
  public:
   CNEMEController(const char *portName, const char *CNEMEPortName, int numAxes, double movingPollPeriod, double idlePollPeriod);
+
+  asynStatus writeReadController();
   
   asynStatus writeInt32(asynUser *pasynUser, epicsInt32 value);
     
   void report(FILE *fp, int level);
   CNEMEAxis* getAxis(asynUser *pasynUser);
   CNEMEAxis* getAxis(int axisNo);
-  
+
+  int cnmotorReset_;
+ 
   friend class CNEMEAxis;
 };

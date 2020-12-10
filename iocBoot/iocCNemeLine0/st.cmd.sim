@@ -27,9 +27,9 @@ asynWaitConnect("L0",.1)
 asynOctetConnect("AA","L0",0)
 
 ## Load record instances
-dbLoadRecords("db/asynRecord.db","P=norum:,R=asyn,PORT=L0,ADDR=0,IMAX=100,OMAX=100")
+dbLoadRecords("$(ASYN)/db/asynRecord.db","P=norum:,R=asyn,PORT=L0,ADDR=0,IMAX=100,OMAX=100")
 
 cd "${TOP}/iocBoot/${IOC}"
 iocInit
 
-asynOctetWriteRead("AA","/1?8\r\n")
+asynOctetWriteRead("AA","/1?8")

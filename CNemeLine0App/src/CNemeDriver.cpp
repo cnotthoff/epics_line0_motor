@@ -11,8 +11,14 @@ Created by Christian Notthoff
 04/12/2020
 -----------------------------
 Modifications:
+11/12/2020 CN: added some code to stop the driver from flooding the port
+11/12/2020 CN: added a parameter to initiate a reset
+11/12/2020 CN: added a home position variable home_ (mm).
+11/12/2020 CN: added soft limit checks to move
 -----------------------------
 */
+
+#define CNDEBUG 1
 
 #include <stdio.h>
 #include <string.h>
@@ -65,6 +71,8 @@ CNEMEController::CNEMEController(const char *portName, const char *CNEMEPortName
   asynStatus status;
   static const char *functionName = "CNEMEController::CNEMEController";
 
+  createParam(cnmotorResetString, asynParamInt32, &cnmotorReset_);
+  
   CNEMEControllerNode *pNode;
   if (!CNEMEControllerListInitialized) {
     CNEMEControllerListInitialized = 1;
@@ -93,7 +101,6 @@ CNEMEController::CNEMEController(const char *portName, const char *CNEMEPortName
 	      functionName,MAX_CNEME_AXES);
   }
   for (axis=0; axis<numAxes; axis++) {
-    //new CNEMEAxis(this, axis, DEFAULT_HOME, DEFAULT_START);
     new CNEMEAxis(this, axis);
     setDoubleParam(axis, this->motorPosition_, DEFAULT_START);
     setDoubleParam(axis, this->motorEncoderPosition_, DEFAULT_START);
@@ -119,23 +126,63 @@ void CNEMEController::report(FILE *fp, int level)
 }
 
 
+asynStatus CNEMEController::writeReadController(){
+  //static const char *functionName = "CNEMEController::writeReadController";
+  asynStatus status;
+  status = asynMotorController::writeReadController();
+
+#ifdef CNDEBUG
+  printf("out: %s\n",outString_);
+  printf("in: %s\n",inString_);
+#endif
+  
+  char *tmpc=inString_;
+  
+  if(tmpc[0] != '\0' && !status){
+    tmpc+=1;
+    sprintf(inString_,"%s",tmpc);
+    tmpc=inString_;
+    //CNtodo might needs modification if we want to use n16R mode. 
+    if( tmpc[2] != '`' && tmpc[2] !='@'){
+      sprintf(outString_,"/1TR");
+      asynMotorController::writeReadController();
+      printf("command error, stopping motor.\n Error was: %d\n",tmpc[2]);
+      return asynError;
+    }
+    while(tmpc[0] != '\0'){
+      if(tmpc[0] == 0x03){
+	tmpc[0] = '\0';
+	break;
+      }
+      tmpc++;
+    }
+  }
+  return status;
+}
+
 asynStatus CNEMEController::writeInt32(asynUser *pasynUser, epicsInt32 value)
 {
   int function = pasynUser->reason;
   asynStatus status = asynSuccess;
   CNEMEAxis *pAxis = this->getAxis(pasynUser);
   static const char *functionName = "CNEMEController::writeInt32";
-  
-  //CNtodo
+
   /* Set the parameter and readback in the parameter library.  This may be overwritten when we read back the
    * status at the end, but that's OK */
   pAxis->setIntegerParam(function, value);
   
-  if( function == motorStop_){
-    //CNtodo not sure if this should be a else if
-    sprintf(this->outString_,"/%01dTR",pAxis->axisNo_+1);
+  if( function == cnmotorReset_){
+    double res=0.;
+    getDoubleParam(pAxis->axisNo_,motorRecResolution_,&res);
+    pAxis->setPosition((int) (pAxis->home_/res));
+    pAxis->setIntegerParam(function, 0);
+    status = asynSuccess;
+  }else if( function == motorStop_){
+    //CNtodo not sure if we really need this stop
+    sprintf(this->outString_,"/%01dTRn0R",pAxis->axisNo_+1);
     status = this->writeReadController();
   };
+
   /* Call base class call its method (if we have our parameters check this here) */
   //CNtodo not sure if this should be here at all
   status = asynMotorController::writeInt32(pasynUser, value);
@@ -187,7 +234,9 @@ CNEMEAxis::CNEMEAxis(CNEMEController *pC, int axisNo)
   limitmap[0]=-1;
   limitmap[1]=-1;
   limitmap[2]=-1;
-  isInitialised_=false;  
+  isInitialised_=false;
+  home_=15.0;
+  posMode_=8; //Check manual for valid numbers, no sanity check performed here.
 }
 
 /** Reports on status of the axis
@@ -217,85 +266,110 @@ asynStatus CNEMEAxis::sendAccelAndVelocity(double acceleration, double velocity)
 }
 
 
+/** Set the high limit position of the motor.
+  * \param[in] highLimit The new high limit position that should be set in the hardware. Units=steps.*/
+asynStatus CNEMEAxis::setHighLimit(double highLimit)
+{
+  hl_=highLimit;
+  return asynSuccess;
+}
+
+
+/** Set the low limit position of the motor.
+  * \param[in] lowLimit The new low limit position that should be set in the hardware. Units=steps.*/
+asynStatus CNEMEAxis::setLowLimit(double lowLimit)
+{
+  ll_=lowLimit;
+  return asynSuccess;
+}
+
 asynStatus CNEMEAxis::move(double position, int relative, double minVelocity, double maxVelocity, double acceleration)
 {
     static const char *functionName = "CNEMEAxis::move";
-  
-    //printf("move:pos=%f, minV=%f, maxV=%f, acc=%f\n",position,minVelocity,maxVelocity,acceleration);
-  asynStatus status;
-  int pos = (int) fabs(position);
-  char* tmpc=NULL;
-
-  if(!isInitialised_){
-    setIntegerParam(pC_->motorStatusProblem_,1);
-    asynPrint(pC_->pasynUserSelf, ASYN_TRACE_ERROR, 
-	      "%s: motor needs initialisation...\n",
-	      functionName);
-    return asynError;
-  }
-  //CNtodo
-  /* Check to see if in limit switch */ //return asynError;
-
-  
-  int ismoving=0;
-  pC_->getIntegerParam(axisNo_,pC_->motorStatusMoving_,&ismoving);
-  if(ismoving){
-    setIntegerParam(pC_->motorStatusProblem_,1);
-    asynPrint(pC_->pasynUserSelf, ASYN_TRACE_ERROR, 
-	      "%s: need to implement something to handl this...\n",
-	      functionName);
-    return asynError;
-  }
-  //CNtodo if we use other modes then position correct mode this needs to be changed
-  // recover from a stop command where /1n0R was issued by setting the motor back to /1n8R (position correction mode)
-  if( (relative && fabs(position) > 0) || relative == 0){
-    sprintf(pC_->outString_,"/%01dn8R",axisNo_+1);
-    status = pC_->writeReadController();
-  }
-  if(relative){
-    if(position > 0){
-    //positive direction
-    sprintf(pC_->outString_,"/%01dP%dR",axisNo_+1,pos);
-    }else if(position < 0){
-    //negative direction
-    sprintf(pC_->outString_,"/%01dD%dR",axisNo_+1,pos);
-    }else{
-      // /1P0R and /1D0R are infinit moves!!!
+#ifdef CNDEBUG
+    printf("move:pos=%f, minV=%f, maxV=%f, acc=%f\n",position,minVelocity,maxVelocity,acceleration);
+#endif
+    
+    asynStatus status;
+    int pos = (int) fabs(position);
+    char* tmpc=NULL;
+    
+    if(!isInitialised_){
+      //setIntegerParam(pC_->motorStatusProblem_,1);
       asynPrint(pC_->pasynUserSelf, ASYN_TRACE_ERROR, 
-		"%s: a zero relative move is odd, I will ignore it.\n",
+		"%s: motor needs initialisation...\n",
 		functionName);
       return asynError;
-    };
-  }else{
-    sprintf(pC_->outString_,"/%01dA%dR",axisNo_+1,(int) position);
-  }
-  status = pC_->writeReadController();
-  //CNtodo
-  if(!status){
-    tmpc=pC_->inString_;
-    if(tmpc[0] != '/' || tmpc[1] != '0'){
-      asynPrint(pC_->pasynUserSelf, ASYN_TRACE_ERROR, 
-		"%s: readback error from S23C/moxa controller, action needs to be impl....\n",
-		functionName);
-    }else if(tmpc[2] != '\'' && tmpc[2] != '@'){
-      asynPrint(pC_->pasynUserSelf, ASYN_TRACE_ERROR, 
-		"%s: error in S23C/moxa controller command, status bit: %d\n",
-		functionName,tmpc[2]);
     }
-  }else{
-    //CNtodo how to handel this?
-    asynPrint(pC_->pasynUserSelf, ASYN_TRACE_ERROR, 
+    
+    
+    /* Check for soft limits */
+    if((position > hl_ || position < ll_) && !relative){
+      asynPrint(pC_->pasynUserSelf, ASYN_TRACE_ERROR, 
+		"%s: move outside softlimits is not allowed.\n",
+		functionName);
+      return asynError;
+    }
+    int ismoving=0;
+    pC_->getIntegerParam(axisNo_,pC_->motorStatusMoving_,&ismoving);
+    if(ismoving){
+      setIntegerParam(pC_->motorStatusProblem_,1);
+      asynPrint(pC_->pasynUserSelf, ASYN_TRACE_ERROR, 
+		"%s: motor is already moving need to implement something to handl this...\n",
+		functionName);
+      return asynError;
+    }
+    
+    // recover from a stop command where /1n0R was issued by setting the motor back to e.g /1n8R (position correction mode)
+    if( (relative && fabs(position) > 0) || relative == 0){
+      sprintf(pC_->outString_,"/%01dn%dR",axisNo_+1,posMode_);
+      status = pC_->writeReadController();
+    }
+    if(relative){
+      if(position > 0){
+	//positive direction
+	sprintf(pC_->outString_,"/%01dP%dR",axisNo_+1,pos);
+      }else if(position < 0){
+	//negative direction
+	sprintf(pC_->outString_,"/%01dD%dR",axisNo_+1,pos);
+      }else{
+	// /1P0R and /1D0R are infinit moves!!!
+	asynPrint(pC_->pasynUserSelf, ASYN_TRACE_ERROR, 
+		  "%s: a zero relative move is odd, I will ignore it.\n",
+		  functionName);
+	return asynError;
+      };
+    }else{
+      sprintf(pC_->outString_,"/%01dA%dR",axisNo_+1,(int) position);
+    }
+    status = pC_->writeReadController();
+    //CNtodo
+    if(!status){
+      tmpc=pC_->inString_;
+      if(tmpc[0] != '/' || tmpc[1] != '0'){
+	asynPrint(pC_->pasynUserSelf, ASYN_TRACE_ERROR, 
+		  "%s: readback error from S23C/moxa controller, action needs to be impl....\n",
+		  functionName);
+      }else if(tmpc[2] != '`' && tmpc[2] != '@'){
+	printf("debug:%s\n",tmpc);
+	asynPrint(pC_->pasynUserSelf, ASYN_TRACE_ERROR, 
+		  "%s: error in S23C/moxa controller command, status bit: %d\n",
+		  functionName,tmpc[2]);
+      }
+    }else{
+      //CNtodo how to handel this?
+      asynPrint(pC_->pasynUserSelf, ASYN_TRACE_ERROR, 
 		"%s: error communicating with S23C/moxa controller, action needs to be impl....\n",
 		functionName);
-  }
-
-  setIntegerParam(pC_->motorStatusDone_, 0);
-  callParamCallbacks();
-  
-  asynPrint(pasynUser_, ASYN_TRACE_FLOW, 
-            "%s:%s: Set driver %s, axis %d move to %f, min vel=%f, max vel=%f, accel=%f\n",
-            driverName, functionName, pC_->portName, axisNo_, position, minVelocity, maxVelocity, acceleration );
-  return asynSuccess;
+    }
+    
+    setIntegerParam(pC_->motorStatusDone_, 0);
+    callParamCallbacks();
+    
+    asynPrint(pasynUser_, ASYN_TRACE_FLOW, 
+	      "%s:%s: Set driver %s, axis %d move to %f, min vel=%f, max vel=%f, accel=%f\n",
+	      driverName, functionName, pC_->portName, axisNo_, position, minVelocity, maxVelocity, acceleration );
+    return asynSuccess;
 }
 
 asynStatus CNEMEAxis::home(double minVelocity, double maxVelocity, double acceleration, int forwards)
@@ -332,8 +406,6 @@ asynStatus CNEMEAxis::stop(double acceleration )
   sprintf(pC_->outString_,"/%01dn0R",axisNo_+1);
   status = pC_->writeReadController();
 
-  //CNtodo is this needed?
-  //sendAccelAndVelocity(acceleration, 0.0);
   return status;
 }
 
@@ -343,7 +415,7 @@ asynStatus CNEMEAxis::setPosition(double position)
   static const char *functionName = "CNEMEAxis::setPosition";
   char* tmpc;
   int pos = (int) position;
-
+  /*
   int ismoving=0;
   pC_->getIntegerParam(axisNo_,pC_->motorStatusMoving_,&ismoving);
   if(ismoving){
@@ -353,16 +425,28 @@ asynStatus CNEMEAxis::setPosition(double position)
 	      functionName);
     return asynError;
   }
-  sprintf(pC_->outString_,"/%01dn0z%dR",axisNo_+1,pos);
+  */
+
+  sprintf(pC_->outString_,"/%01dTR",axisNo_+1);
   status = pC_->writeReadController();
-  sprintf(pC_->outString_,"/%01dn0z%dR",axisNo_+1,pos);
+  sprintf(pC_->outString_,"/%01dn0z0R",axisNo_+1);
+  status = pC_->writeReadController();
+  sprintf(pC_->outString_,"/%01dn0z0R",axisNo_+1);
+  status = pC_->writeReadController();
+  tmpc=pC_->inString_;
+  if(status != asynSuccess) return asynError;
+  if(tmpc[2] != '`' && tmpc[2] != '@') return asynError;
+  
+  sprintf(pC_->outString_,"/%01dh6m60j256V68888aE10000aC100n0R",axisNo_+1);
+  status = pC_->writeReadController();
+  tmpc=pC_->inString_;
+  if(status != asynSuccess) return asynError;
+  if(tmpc[2] != '`' && tmpc[2] != '@') return asynError;
+  
+  sprintf(pC_->outString_,"/%01dz%dn%dRaE10250R",axisNo_+1,pos,posMode_);
   status = pC_->writeReadController();
   
-  //CNtodo currently hard coded have to change this
-  sprintf(pC_->outString_,"/%01dh6m60j256V68888aE10240aC100n8R",axisNo_+1);
-  status = pC_->writeReadController();
   if(!status){
-    //printf("error: %s\n",(const char *)&pC_->inString_);
     tmpc=pC_->inString_;
     if(tmpc[0] != '/' || tmpc[1] != '0'){
       asynPrint(pC_->pasynUserSelf, ASYN_TRACE_ERROR, 
@@ -370,12 +454,15 @@ asynStatus CNEMEAxis::setPosition(double position)
 	      functionName);
     }else{
       //CNtodo may be, maybe not?
-      //printf("setPosition readback was:%s\n needs to be implemented",tmpc);
-      //if(tmpc[2] != '\'' || tmpc[2] != '@'){
-      //}
+      if(tmpc[2] != '`' && tmpc[2] != '@'){
+	printf("setPosition readback was:%s\n needs to be implemented",tmpc);
+      }
     }
   }else{
     //CNtodo raise a alarm flag if there is something wrong with the motor respponse
+    asynPrint(pC_->pasynUserSelf, ASYN_TRACE_ERROR, 
+	      "%s: error from S23C/moxa controller, action needs to be impl....\n",
+	      functionName);
   }
   
   setDoubleParam (pC_->motorPosition_,         position);
@@ -398,21 +485,9 @@ asynStatus CNEMEAxis::config(int home, int vel)
   //static const char *functionName = "CNEMEAxis::setPosition";
   //home_ = home;
   //homed_ = 0;
+  //posMode_ = 8;
   return asynSuccess;
 }
-
-
-//asynStatus CNEMEAxis::setClosedLoop(bool closedLoop)
-//{
-  //printf("cl\n");
-  //return(asynSuccess);
-  //asynStatus status;
-  //static const char *functionName = "CNEMEAxis::setClosedLoop";
-  //CNtodo not sure if we what this behaviour
-  //sprintf(pC_->outString_, "", axisNo_+1, closedLoop ? 1:0);
-  //status = pC_->writeReadController();
-  //return status;
-  //}
 
 /** Polls the axis.
   * This function reads the motor position, the limit status, the home status, the moving status, 
@@ -422,24 +497,29 @@ asynStatus CNEMEAxis::config(int home, int vel)
   * \param[out] moving A flag that is set indicating that the axis is moving (true) or done (false). */
 asynStatus CNEMEAxis::poll(bool *moving)
 {
-  //printf("polling...\n");
   static const char *functionName = "CNEMEAxis::poll";
   int done=0;
   //int limit;
   double position=-5000;
   asynStatus status;
   char *tmpc=NULL;
-  bool mo=false;//CNtodo change to *moving?
-
+  bool mo=false;
+  double res=0.;
+  
   int con=0;
   pasynManager->isConnected(pC_->pasynUserController_,&con);
   //printf("status %s\n",(con)? "connected":"disconnected");
+  //printf("status %s\n",(isInitialised_)? "init":"uninit");
   if(!con || !isInitialised_){
     status = asynError;
     setDoubleParam (pC_->motorEncoderPosition_, DEFAULT_START);
     setDoubleParam (pC_->motorPosition_,        DEFAULT_START);
     setIntegerParam(pC_->motorStatusDone_,      1);
     setIntegerParam(pC_->motorStatusMoving_,    0);
+    if(con){
+      status = asynSuccess;
+      pasynOctetSyncIO->flush(pC_->pasynUserController_);
+    }
     *moving = false;
     isInitialised_=false;
     goto skip;
@@ -458,10 +538,10 @@ asynStatus CNEMEAxis::poll(bool *moving)
       status = asynError;
       goto skip;
     }else{
-      if(tmpc[2] == '\'' || tmpc[2] == '@'){
-	// *moving = mo;//CNtodo might be !mo?
+      if(tmpc[2] == '`' || tmpc[2] == '@'){
+	// *moving = mo;
 	mo = tmpc[2] == '@' ? true:false;
-	done = tmpc[2] == '\'' ? true:false;
+	done = tmpc[2] == '`' ? true:false;
       }
       //printf("hl=%d\n",(int)(tmpc[3] & limitmap[0]));
       //printf("ll=%d\n",(int)(tmpc[3] & limitmap[1]));
@@ -489,10 +569,10 @@ asynStatus CNEMEAxis::poll(bool *moving)
     } 
   }
   */
+  
   // Read the current encoder position
   sprintf(pC_->outString_,"/%01d?8",axisNo_+1);
   status = pC_->writeReadController();
-
   if (status) goto skip;
   tmpc=pC_->inString_;
   if(tmpc[0] != '/' || tmpc[1] != '0'){
@@ -502,10 +582,9 @@ asynStatus CNEMEAxis::poll(bool *moving)
     status = asynError;
     goto skip;
   }else{
-    if(tmpc[2] == '\'' || tmpc[2] == '@'){
-      //*moving = mo;//CNtodo might be !mo?
+    if(tmpc[2] == '`' || tmpc[2] == '@'){
       mo = tmpc[2] == '@' ? true:false;
-      done = tmpc[2] == '\'' ? true:false;
+      done = tmpc[2] == '`' ? true:false;
       tmpc+=3;
       if(tmpc[0]!='\0'){
 	position = strtol(tmpc,NULL,10);
@@ -525,7 +604,6 @@ asynStatus CNEMEAxis::poll(bool *moving)
   sprintf(pC_->outString_,"/%01d?0",axisNo_+1);
   status = pC_->writeReadController();
   if (status) goto skip;
-  // The response string is of the form "#01P=+1000"
   tmpc=pC_->inString_;
   if(tmpc[0] != '/' || tmpc[1] != '0'){
     asynPrint(pC_->pasynUserSelf, ASYN_TRACE_ERROR, 
@@ -534,10 +612,9 @@ asynStatus CNEMEAxis::poll(bool *moving)
     status = asynError;
     goto skip;
   }else{
-    if(tmpc[2] == '\'' || tmpc[2] == '@'){
-      //*moving = mo;//CNtodo might be !mo?
+    if(tmpc[2] == '`' || tmpc[2] == '@'){
       mo = tmpc[2] == '@' ? true:false;
-      done = tmpc[2] == '\'' ? true:false;
+      done = tmpc[2] == '`' ? true:false;
       tmpc+=3;
       if(tmpc[0]!='\0'){
 	position = strtol(tmpc,NULL,10);
@@ -556,8 +633,6 @@ asynStatus CNEMEAxis::poll(bool *moving)
   setIntegerParam(pC_->motorStatusDone_,      done);
   setIntegerParam(pC_->motorStatusMoving_,   !done);
   *moving = mo;
-  //printf("mo=%d\n",mo);
-  //printf("st=%d\n",!done);
   
   // Read the limit status
   //setIntegerParam(pC_->motorStatusHighLimit_, limit);
@@ -565,7 +640,9 @@ asynStatus CNEMEAxis::poll(bool *moving)
   //setIntegerParam(pC_->motorStatusAtHome_, limit);
   //setIntegerParam(pC_->motorStatusPowerOn_, driveOn/Off);
   //setIntegerParam(pC_->motorStatusDirection_,  ?);
-  //setIntegerParam(pC_->motorStatusHome_,       (position == home_));
+
+  //pC_->getDoubleParam(pC_->motorRecResolution_,&res);
+  //setIntegerParam(pC_->motorStatusHome_,       !(position == (int) (home_/res)));
   //setIntegerParam(pC_->motorStatusHomed_,      (homed_ == 1));
 
   skip:

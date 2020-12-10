@@ -19,7 +19,45 @@ record(motor,"$(P)$(M)")
 	field(EGU,"$(EGU)")
 	field(DHLM,"$(DHLM)")
 	field(DLLM,"$(DLLM)")
-	field(INIT,"$(INIT)")
+	field(INIT,"")
 	field(TWV,"1")
 }
 
+# reset the motor and initialise position to 15 mm
+record(ao,"$(P)$(M)_reset") {
+    field(DESC, "resets motor $(M) to x (EGU)")
+    field(DTYP, "asynInt32")
+    field(OUT,  "@asyn($(PORT),$(ADDR))CNMOTOR_RESET")
+    field(OMSL, "closed_loop")
+    field(PREC, "$(PREC)")
+}
+
+# Motor resolution for this axis
+record(ao,"$(P)$(M)Resolution") {
+    field(DESC, "$(M) resolution")
+    field(DOL,  "$(P)$(M).MRES CP MS")
+    field(OMSL, "closed_loop")
+    field(DTYP, "asynFloat64")
+    field(OUT,  "@asyn($(PORT),$(ADDR))MOTOR_REC_RESOLUTION")
+    field(PREC, "$(PREC)")
+}
+
+# These are useful if you need to set the software limits 
+# under the feet of the motor record.
+#record(ao, "$(P)$(M)_HighLimit")
+#{
+#   field(PINI, "YES")
+#   field(DTYP, "asynFloat64")
+#   field(OUT,  "@asyn($(PORT),$(ADDR))MOTOR_HIGH_LIMIT")
+#   field(VAL,  "0")
+#   info(autosaveFields, "VAL")
+#}
+
+#record(ao, "$(P)$(M)_LowLimit")
+#{
+#   field(PINI, "YES")
+#   field(DTYP, "asynFloat64")
+#   field(OUT,  "@asyn($(PORT),$(ADDR))MOTOR_LOW_LIMIT")
+#   field(VAL,  "0")
+#   info(autosaveFields, "VAL")
+#}
